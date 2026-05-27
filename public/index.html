@@ -240,8 +240,17 @@ body { background: var(--off); color: var(--ink); font-family: 'Instrument Sans'
 .fadeup-1 { animation:fadeUp 0.35s 0.05s ease both; }
 .fadeup-2 { animation:fadeUp 0.35s 0.1s ease both; }
 .fadeup-3 { animation:fadeUp 0.35s 0.15s ease both; }
-@media(max-width:1100px){.grid{grid-template-columns:repeat(2,1fr);}.stats{grid-template-columns:repeat(2,1fr);}}
-@media(max-width:800px){.sidebar{display:none;}.main{margin-left:0;}.bottom{grid-template-columns:1fr;}}
+/* ── Wallet Modal ── */
+.wallet-option { display:flex; align-items:center; gap:12px; padding:12px 14px; border:1px solid var(--line); border-radius:var(--r2); cursor:pointer; transition:all 0.15s; margin-bottom:8px; }
+.wallet-option:hover { border-color:var(--line2); background:var(--off); }
+.wallet-option-icon { font-size:22px; width:36px; text-align:center; flex-shrink:0; }
+.wallet-option-info { flex:1; }
+.wallet-option-name { font-size:13px; font-weight:600; color:var(--ink); margin-bottom:2px; }
+.wallet-option-sub { font-family:'DM Mono',monospace; font-size:10px; color:var(--muted); }
+.wallet-option-status { font-family:'DM Mono',monospace; font-size:10px; padding:3px 9px; border-radius:99px; background:var(--off2); color:var(--muted); border:1px solid var(--line); white-space:nowrap; }
+.wallet-option-status.found { background:var(--accent-bg); color:var(--accent); border-color:var(--accent-line); }
+.wallet-option-status.notfound { background:var(--red-bg); color:var(--red); border-color:rgba(192,57,43,.15); }
+
 </style>
 </head>
 <body>
@@ -278,8 +287,8 @@ body { background: var(--off); color: var(--ink); font-family: 'Instrument Sans'
     </div>
   </nav>
   <div class="sidebar-footer">
-    <div class="wallet" id="walletCard" onclick="connectWallet()">
-      <div class="wallet-lbl">PETRA WALLET</div>
+    <div class="wallet" id="walletCard" onclick="openWalletModal()">
+      <div class="wallet-lbl">PETRA WALLET · APTOS TESTNET</div>
       <div class="wallet-addr" id="walletAddr">Not connected</div>
       <div class="wallet-row">
         <div>
@@ -441,6 +450,91 @@ body { background: var(--off); color: var(--ink); font-family: 'Instrument Sans'
   </div>
 </div>
 
+<!-- Wallet Modal -->
+<div class="overlay" id="walletModal" onclick="if(event.target===this)closeWalletModal()">
+  <div class="modal" style="width:420px;">
+    <div class="modal-head">
+      <span class="modal-title" id="walletModalTitle">Connect Wallet</span>
+      <button class="modal-close" onclick="closeWalletModal()">✕</button>
+    </div>
+    <div class="modal-body" id="walletModalBody">
+
+      <!-- NOT CONNECTED STATE -->
+      <div id="walletConnectView">
+        <p style="font-size:12.5px;color:var(--ink2);margin-bottom:18px;line-height:1.6;">
+          Connect your Aptos wallet to upload datasets, access data, and earn APT. DataProof uses <strong>Petra</strong> wallet on Aptos testnet.
+        </p>
+
+        <!-- Petra option -->
+        <div class="wallet-option" id="petraOption" onclick="connectPetra()">
+          <div class="wallet-option-icon">🦊</div>
+          <div class="wallet-option-info">
+            <div class="wallet-option-name">Petra Wallet</div>
+            <div class="wallet-option-sub">Recommended · Aptos native</div>
+          </div>
+          <div class="wallet-option-status" id="petraStatus">Detect</div>
+        </div>
+
+        <!-- Divider -->
+        <div style="display:flex;align-items:center;gap:10px;margin:14px 0;">
+          <div style="flex:1;height:1px;background:var(--line);"></div>
+          <span style="font-family:'DM Mono',monospace;font-size:10px;color:var(--muted);">or connect manually</span>
+          <div style="flex:1;height:1px;background:var(--line);"></div>
+        </div>
+
+        <!-- Manual address input -->
+        <div class="field">
+          <label class="field-label">ENTER WALLET ADDRESS MANUALLY</label>
+          <input class="field-input" id="manualWalletInput" type="text" placeholder="0x...your aptos address">
+          <div style="font-family:'DM Mono',monospace;font-size:10px;color:var(--muted);margin-top:5px;">
+            Use this if you don't have Petra installed yet
+          </div>
+        </div>
+        <button class="btn btn-ghost" style="width:100%;justify-content:center;margin-bottom:4px;" onclick="connectManual()">
+          Connect with Address
+        </button>
+
+        <!-- Install Petra link -->
+        <div style="text-align:center;margin-top:12px;">
+          <a href="https://petra.app" target="_blank" style="font-family:'DM Mono',monospace;font-size:10px;color:var(--accent2);text-decoration:none;">
+            Don't have Petra? Install it at petra.app →
+          </a>
+        </div>
+      </div>
+
+      <!-- CONNECTED STATE -->
+      <div id="walletConnectedView" style="display:none;">
+        <div style="background:var(--accent-bg);border:1px solid var(--accent-line);border-radius:var(--r2);padding:16px;margin-bottom:16px;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+            <div style="width:36px;height:36px;background:var(--accent);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;">✓</div>
+            <div>
+              <div style="font-size:13px;font-weight:600;color:var(--accent);">Wallet Connected</div>
+              <div style="font-family:'DM Mono',monospace;font-size:10px;color:var(--accent2);">Aptos Testnet</div>
+            </div>
+          </div>
+          <div style="font-family:'DM Mono',monospace;font-size:11px;color:var(--ink2);word-break:break-all;margin-bottom:10px;" id="connectedAddress">—</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div>
+              <div style="font-family:'DM Mono',monospace;font-size:10px;color:var(--muted);margin-bottom:2px;">BALANCE</div>
+              <div style="font-size:16px;font-weight:700;color:var(--ink);" id="connectedBalance">— APT</div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-family:'DM Mono',monospace;font-size:10px;color:var(--muted);margin-bottom:2px;">NETWORK</div>
+              <div style="font-family:'DM Mono',monospace;font-size:11px;color:var(--blue);">Aptos Testnet</div>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:4px;">
+          <button class="btn btn-ghost" style="justify-content:center;" onclick="copyAddress()">Copy Address</button>
+          <button class="btn btn-danger" style="justify-content:center;background:var(--red-bg);color:var(--red);border-color:rgba(192,57,43,.2);" onclick="disconnectWallet()">Disconnect</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
 <!-- Toast container -->
 <div class="toast-wrap" id="toastWrap"></div>
 
@@ -477,8 +571,8 @@ async function api(path, opts = {}) {
 // ── Boot ──────────────────────────────────────────────────────────
 async function boot() {
   try {
+    restoreWalletSession();
     await Promise.all([loadStats(), loadDatasets(), loadProofs()]);
-    if (userWallet) showWalletConnected(userWallet);
   } catch (err) {
     showToast('Failed to connect to server. Is it running?', 'error');
   }
@@ -715,38 +809,156 @@ async function submitUpload() {
   }
 }
 
-// ── Wallet ────────────────────────────────────────────────────────
-async function connectWallet() {
-  if (authToken) { showToast('Already connected: ' + userWallet.slice(0,12) + '…'); return; }
+// ── Wallet ─────────────────────────────────────────────────────────
+function openWalletModal() {
+  // If already connected show connected view, else show connect view
+  if (authToken && userWallet) {
+    showConnectedView(userWallet);
+  } else {
+    showConnectView();
+  }
+  document.getElementById('walletModal').classList.add('open');
+  checkPetraInstalled();
+}
+
+function closeWalletModal() {
+  document.getElementById('walletModal').classList.remove('open');
+}
+
+function showConnectView() {
+  document.getElementById('walletModalTitle').textContent = 'Connect Wallet';
+  document.getElementById('walletConnectView').style.display   = 'block';
+  document.getElementById('walletConnectedView').style.display = 'none';
+}
+
+function showConnectedView(address) {
+  document.getElementById('walletModalTitle').textContent = 'Wallet';
+  document.getElementById('walletConnectView').style.display   = 'none';
+  document.getElementById('walletConnectedView').style.display = 'block';
+  document.getElementById('connectedAddress').textContent = address;
+  fetchAptosBalance(address);
+}
+
+// Check if Petra is installed and update the button label
+function checkPetraInstalled() {
+  const statusEl = document.getElementById('petraStatus');
+  if (!statusEl) return;
+  if (window.petra) {
+    statusEl.textContent = 'Installed ✓';
+    statusEl.className   = 'wallet-option-status found';
+  } else {
+    statusEl.textContent = 'Not installed';
+    statusEl.className   = 'wallet-option-status notfound';
+  }
+}
+
+// Connect via Petra browser extension
+async function connectPetra() {
+  if (!window.petra) {
+    showToast('Petra not found — install it at petra.app', 'error');
+    window.open('https://petra.app', '_blank');
+    return;
+  }
   try {
-    // Try Petra wallet (Aptos)
-    if (window.petra) {
-      const resp = await window.petra.connect();
-      const address = resp.address;
-      const data = await api('/api/auth/wallet', {
-        method: 'POST',
-        body: JSON.stringify({ walletAddress: address, publicKey: resp.publicKey }),
-      });
-      authToken  = data.token;
-      userWallet = address;
-      localStorage.setItem('dp_token', authToken);
-      localStorage.setItem('dp_wallet', userWallet);
-      showWalletConnected(address);
-      showToast('Wallet connected!', 'success');
+    showToast('Connecting to Petra…');
+    const resp    = await window.petra.connect();
+    const address = resp.address;
+    await signInToAPI(address, resp.publicKey);
+  } catch (err) {
+    if (err.message?.includes('User rejected')) {
+      showToast('Connection rejected in Petra', 'error');
     } else {
-      showToast('Petra wallet not found. Install from petra.app', 'error');
+      showToast(err.message, 'error');
     }
+  }
+}
+
+// Connect with manually entered address (no extension needed)
+async function connectManual() {
+  const input   = document.getElementById('manualWalletInput');
+  const address = input.value.trim();
+  if (!address) { showToast('Please enter a wallet address', 'error'); return; }
+  if (!address.startsWith('0x') || address.length < 10) {
+    showToast('Invalid Aptos address — must start with 0x', 'error');
+    return;
+  }
+  try {
+    showToast('Connecting…');
+    await signInToAPI(address, null);
   } catch (err) {
     showToast(err.message, 'error');
   }
 }
 
-function showWalletConnected(address) {
-  document.getElementById('walletAddr').textContent = address.slice(0,6) + '…' + address.slice(-4);
-  document.getElementById('walletBal').textContent  = '—';
-  document.getElementById('liveIndicator').style.display = 'flex';
-  document.getElementById('connectHint').style.display   = 'none';
+// Call the backend auth endpoint and store JWT
+async function signInToAPI(address, publicKey) {
+  const data = await api('/api/auth/wallet', {
+    method: 'POST',
+    body: JSON.stringify({ walletAddress: address, publicKey: publicKey || '' }),
+  });
+  authToken  = data.token;
+  userWallet = address;
+  localStorage.setItem('dp_token',  authToken);
+  localStorage.setItem('dp_wallet', userWallet);
+  showWalletConnected(address);
+  showConnectedView(address);
+  showToast('Wallet connected!', 'success');
+  loadStats();
 }
+
+// Update the sidebar wallet card
+function showWalletConnected(address) {
+  document.getElementById('walletAddr').textContent        = address.slice(0,6) + '…' + address.slice(-4);
+  document.getElementById('connectHint').style.display     = 'none';
+  document.getElementById('liveIndicator').style.display   = 'flex';
+}
+
+// Fetch real APT balance from Aptos testnet
+async function fetchAptosBalance(address) {
+  try {
+    const res  = await fetch(`https://api.testnet.aptoslabs.com/v1/accounts/${address}/resource/0x1::coin::CoinStore%3C0x1::aptos_coin::AptosCoin%3E`);
+    if (!res.ok) throw new Error('no balance');
+    const data = await res.json();
+    const apt  = (Number(data.data.coin.value) / 1e8).toFixed(4);
+    document.getElementById('connectedBalance').textContent = apt + ' APT';
+    document.getElementById('walletBal').textContent        = apt + ' APT';
+    document.getElementById('walletUsd').textContent        = '≈ $' + (apt * 6.65).toFixed(2) + ' USD';
+  } catch {
+    document.getElementById('connectedBalance').textContent = '0.0000 APT';
+    document.getElementById('walletBal').textContent        = '0.0000 APT';
+  }
+}
+
+// Copy address to clipboard
+function copyAddress() {
+  navigator.clipboard.writeText(userWallet).then(() => {
+    showToast('Address copied!', 'success');
+  });
+}
+
+// Disconnect wallet — clear all state
+function disconnectWallet() {
+  authToken  = '';
+  userWallet = '';
+  localStorage.removeItem('dp_token');
+  localStorage.removeItem('dp_wallet');
+  document.getElementById('walletAddr').textContent      = 'Not connected';
+  document.getElementById('walletBal').textContent       = '—';
+  document.getElementById('walletUsd').textContent       = '';
+  document.getElementById('liveIndicator').style.display = 'none';
+  document.getElementById('connectHint').style.display   = 'block';
+  closeWalletModal();
+  showToast('Wallet disconnected');
+}
+
+// On load — restore session if token exists
+function restoreWalletSession() {
+  if (authToken && userWallet) {
+    showWalletConnected(userWallet);
+    fetchAptosBalance(userWallet);
+  }
+}
+
 
 // ── Filters / search ──────────────────────────────────────────────
 function setNav(el) { document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active')); el.classList.add('active'); }
