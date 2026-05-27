@@ -1,0 +1,74 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+model User {
+  id             String      @id @default(uuid())
+  walletAddress  String      @unique
+  aptosPublicKey String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  datasets       Dataset[]
+  accessLogs     AccessLog[]
+  apiKeys        ApiKey[]
+}
+model Dataset {
+  id            String   @id @default(uuid())
+  name          String
+  description   String
+  category      String
+  chain         String
+  format        String
+  sizeBytes     BigInt
+  sizeLabel     String
+  pricePerRead  Float
+  license       String   @default("CC BY 4.0")
+  updateFreq    String   @default("static")
+  aiUseCaseTags String[]
+  tags          String[]
+  shelbyKey     String   @unique
+  shelbyEtag    String?
+  schemaJson    Json?
+  aptosObjectId String?  @unique
+  aptosUploadTx String?
+  totalReads    Int      @default(0)
+  totalEarnings Float    @default(0)
+  isActive      Boolean  @default(true)
+  uploaderId    String
+  uploader      User     @relation(fields: [uploaderId], references: [id])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  accessLogs    AccessLog[]
+  @@index([chain])
+  @@index([category])
+  @@index([uploaderId])
+}
+model AccessLog {
+  id            String   @id @default(uuid())
+  datasetId     String
+  dataset       Dataset  @relation(fields: [datasetId], references: [id])
+  accessorId    String?
+  accessor      User?    @relation(fields: [accessorId], references: [id])
+  walletAddress String
+  aptosProofTx  String
+  priceCharged  Float
+  bytesServed   BigInt
+  createdAt     DateTime @default(now())
+  @@index([datasetId])
+  @@index([walletAddress])
+  @@index([createdAt])
+}
+model ApiKey {
+  id        String    @id @default(uuid())
+  key       String    @unique
+  name      String
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  lastUsed  DateTime?
+  createdAt DateTime  @default(now())
+  isActive  Boolean   @default(true)
+  @@index([userId])
+}
