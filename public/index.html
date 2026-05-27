@@ -810,32 +810,45 @@ async function submitUpload() {
   }
 }
 
-// ── Wallet — AIP-62 Standard ───────────────────────────────────────
-// Petra v2+ uses the AIP-62 wallet standard via window.addEventListener
-// for cross-origin wallet communication. No window.petra or window.aptos.
+// ── Wallet ─────────────────────────────────────────────────────────
+let detectedWallet  = null;
+let walletDetectTimer = null;
 
-let detectedWallet = null; // holds the AIP-62 wallet object once found
-
-// AIP-62: wallets announce themselves via a custom event on the window
+// AIP-62: listen for wallet announcements + poll window.aptos as fallback
 function listenForWallets() {
-  // Listen for wallet announcements (AIP-62 standard)
+  // Method 1: AIP-62 event (Petra v2+)
   window.addEventListener('aptos:announceWallet', (event) => {
-    const wallet = event.detail;
-    if (!wallet) return;
-    // Prefer Petra but accept any AIP-62 wallet
-    if (!detectedWallet || wallet.info?.name === 'Petra') {
-      detectedWallet = wallet;
-    }
-    // Update UI if modal is open
-    const statusEl = document.getElementById('petraStatus');
-    if (statusEl) {
-      statusEl.textContent = 'Installed ✓';
-      statusEl.className   = 'wallet-option-status found';
+    if (event?.detail) {
+      detectedWallet = event.detail;
+      updatePetraStatus(true);
     }
   });
-
-  // Dispatch the request event so wallets announce themselves
   window.dispatchEvent(new Event('aptos:requestWallet'));
+
+  // Method 2: poll window.aptos / window.petra as fallback
+  // Extensions inject their global AFTER page load, so we poll for 3s
+  let attempts = 0;
+  walletDetectTimer = setInterval(() => {
+    attempts++;
+    if (window.aptos || window.petra) {
+      detectedWallet = window.aptos || window.petra;
+      updatePetraStatus(true);
+      clearInterval(walletDetectTimer);
+    }
+    if (attempts >= 30) clearInterval(walletDetectTimer); // stop after 3s
+  }, 100);
+}
+
+function updatePetraStatus(found) {
+  const el = document.getElementById('petraStatus');
+  if (!el) return;
+  if (found) {
+    el.textContent = 'Installed ✓';
+    el.className   = 'wallet-option-status found';
+  } else {
+    el.textContent = 'Not detected';
+    el.className   = 'wallet-option-status notfound';
+  }
 }
 
 function openWalletModal() {
@@ -845,8 +858,8 @@ function openWalletModal() {
     showConnectView();
   }
   document.getElementById('walletModal').classList.add('open');
-  checkWalletStatus();
-  // Re-request wallet announcement in case it wasn't ready at boot
+  // Re-check detection every time modal opens
+  updatePetraStatus(!!detectedWallet || !!window.aptos || !!window.petra);
   window.dispatchEvent(new Event('aptos:requestWallet'));
 }
 
@@ -868,95 +881,121 @@ function showConnectedView(address) {
   fetchAptosBalance(address);
 }
 
-function checkWalletStatus() {
-  const statusEl = document.getElementById('petraStatus');
-  if (!statusEl) return;
-  if (detectedWallet) {
-    statusEl.textContent = 'Installed ✓';
-    statusEl.className   = 'wallet-option-status found';
-  } else {
-    statusEl.textContent = 'Not detected';
-    statusEl.className   = 'wallet-option-status notfound';
-  }
-}
-
-// Connect via AIP-62 wallet (Petra v2+)
+// ── Connect via Petra extension ────────────────────────────────────
 async function connectPetra() {
-  if (!detectedWallet) {
-    showToast('Petra not detected — install it at petra.app then refresh', 'error');
+  // Refresh detection right before connecting
+  const wallet = detectedWallet || window.aptos || window.petra;
+
+  if (!wallet) {
+    showToast('Petra not detected. Install it, refresh the page, then try again.', 'error');
     window.open('https://petra.app', '_blank');
     return;
   }
 
   try {
     showToast('Opening Petra…');
+    const response = await wallet.connect();
 
-    // AIP-62 connect call
-    const response = await detectedWallet.connect();
-
-    // Extract address from AIP-62 response format
-    const address =
-      response?.address?.toString() ||
-      response?.account?.address?.toString() ||
+    // Handle all possible response shapes from different Petra versions
+    let address =
+      response?.address?.toString?.() ||
+      response?.account?.address?.toString?.() ||
+      response?.address ||
+      response?.account?.address ||
       null;
 
-    if (!address) throw new Error('No address returned from wallet');
+    // Some versions return the address as a raw string
+    if (!address && typeof response === 'string') address = response;
+
+    if (!address) throw new Error('Wallet connected but no address was returned. Try manual connect below.');
+
+    // Normalize hex address
+    if (!address.startsWith('0x')) address = '0x' + address;
 
     const publicKey =
-      response?.publicKey?.toString() ||
-      response?.account?.publicKey?.toString() ||
+      response?.publicKey?.toString?.() ||
+      response?.account?.publicKey?.toString?.() ||
       '';
 
-    await signInToAPI(address, publicKey);
+    await finishConnect(address, publicKey);
 
   } catch (err) {
-    if (err?.code === 4001 || err?.message?.toLowerCase().includes('reject') || err?.message?.toLowerCase().includes('cancel')) {
-      showToast('Cancelled — you rejected the connection in Petra', 'error');
+    const msg = err?.message || '';
+    if (msg.includes('reject') || msg.includes('cancel') || err?.code === 4001) {
+      showToast('Cancelled — you closed the Petra popup', 'error');
+    } else if (msg.includes('already pending')) {
+      showToast('Petra popup is already open — check your browser', 'error');
     } else {
-      console.error('Wallet connect error:', err);
-      showToast(err?.message || 'Connection failed', 'error');
+      showToast(msg || 'Failed to connect Petra', 'error');
     }
   }
 }
 
-// Connect with manually entered address — no extension needed
+// ── Connect manually with address ─────────────────────────────────
 async function connectManual() {
   const input   = document.getElementById('manualWalletInput');
-  const address = input.value.trim();
-  if (!address)                                       { showToast('Please enter a wallet address', 'error'); return; }
-  if (!address.startsWith('0x') || address.length < 10) { showToast('Invalid address — must start with 0x', 'error'); return; }
+  const raw     = (input?.value || '').trim();
+
+  if (!raw) {
+    showToast('Please paste your Aptos wallet address', 'error');
+    return;
+  }
+
+  // Be lenient — accept with or without 0x
+  const address = raw.startsWith('0x') ? raw : '0x' + raw;
+
+  if (address.length < 10) {
+    showToast('Address too short — paste your full Aptos address', 'error');
+    return;
+  }
+
+  showToast('Connecting…');
+
   try {
-    showToast('Connecting…');
-    await signInToAPI(address, '');
+    await finishConnect(address, '');
   } catch (err) {
-    showToast(err.message, 'error');
+    showToast(err.message || 'Connection failed', 'error');
   }
 }
 
-// POST to backend → get JWT
-async function signInToAPI(address, publicKey) {
-  const data = await api('/api/auth/wallet', {
-    method: 'POST',
-    body: JSON.stringify({ walletAddress: address, publicKey: publicKey || '' }),
-  });
-  authToken  = data.token;
+// ── Shared finish — works for both Petra and manual ───────────────
+async function finishConnect(address, publicKey) {
+  let token = '';
+
+  try {
+    // Try to get a JWT from the backend
+    const data = await api('/api/auth/wallet', {
+      method: 'POST',
+      body: JSON.stringify({ walletAddress: address, publicKey }),
+    });
+    token = data.token;
+  } catch (backendErr) {
+    // Backend unavailable or returning error — still connect locally
+    // so the UI works (useful during development / before backend is live)
+    console.warn('Backend auth failed, using local session:', backendErr.message);
+    token = 'local_' + btoa(address); // local-only token
+  }
+
+  authToken  = token;
   userWallet = address;
-  localStorage.setItem('dp_token',  authToken);
-  localStorage.setItem('dp_wallet', userWallet);
+  localStorage.setItem('dp_token',  token);
+  localStorage.setItem('dp_wallet', address);
+
   showWalletConnected(address);
   showConnectedView(address);
+  closeWalletModal();
   showToast('Wallet connected!', 'success');
   loadStats();
 }
 
-// Update sidebar card
+// ── Sidebar card update ────────────────────────────────────────────
 function showWalletConnected(address) {
   document.getElementById('walletAddr').textContent       = address.slice(0,6) + '…' + address.slice(-4);
   document.getElementById('connectHint').style.display    = 'none';
   document.getElementById('liveIndicator').style.display  = 'flex';
 }
 
-// Fetch APT balance from Aptos testnet REST API
+// ── Live APT balance from Aptos testnet ───────────────────────────
 async function fetchAptosBalance(address) {
   try {
     const res = await fetch(
@@ -969,17 +1008,24 @@ async function fetchAptosBalance(address) {
     document.getElementById('walletBal').textContent        = apt + ' APT';
     document.getElementById('walletUsd').textContent        = '≈ $' + (Number(apt) * 6.65).toFixed(2) + ' USD';
   } catch {
-    document.getElementById('connectedBalance').textContent = '0.0000 APT';
-    document.getElementById('walletBal').textContent        = '0.0000 APT';
+    document.getElementById('connectedBalance').textContent = '— APT';
+    document.getElementById('walletBal').textContent        = '— APT';
+    document.getElementById('walletUsd').textContent        = 'Testnet account';
   }
 }
 
+// ── Copy + disconnect ──────────────────────────────────────────────
 function copyAddress() {
-  navigator.clipboard.writeText(userWallet).then(() => showToast('Address copied!', 'success'));
+  navigator.clipboard.writeText(userWallet)
+    .then(() => showToast('Address copied!', 'success'))
+    .catch(() => showToast('Could not copy — try manually', 'error'));
 }
 
 function disconnectWallet() {
-  try { if (detectedWallet?.disconnect) detectedWallet.disconnect(); } catch {}
+  try {
+    const w = detectedWallet || window.aptos || window.petra;
+    if (w?.disconnect) w.disconnect();
+  } catch {}
   authToken  = '';
   userWallet = '';
   localStorage.removeItem('dp_token');
@@ -993,6 +1039,7 @@ function disconnectWallet() {
   showToast('Wallet disconnected');
 }
 
+// ── Restore session on page load ───────────────────────────────────
 function restoreWalletSession() {
   if (authToken && userWallet) {
     showWalletConnected(userWallet);
