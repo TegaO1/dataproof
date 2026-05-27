@@ -571,6 +571,7 @@ async function api(path, opts = {}) {
 // ── Boot ──────────────────────────────────────────────────────────
 async function boot() {
   try {
+    listenForWallets();
     restoreWalletSession();
     await Promise.all([loadStats(), loadDatasets(), loadProofs()]);
   } catch (err) {
@@ -809,16 +810,44 @@ async function submitUpload() {
   }
 }
 
-// ── Wallet ─────────────────────────────────────────────────────────
+// ── Wallet — AIP-62 Standard ───────────────────────────────────────
+// Petra v2+ uses the AIP-62 wallet standard via window.addEventListener
+// for cross-origin wallet communication. No window.petra or window.aptos.
+
+let detectedWallet = null; // holds the AIP-62 wallet object once found
+
+// AIP-62: wallets announce themselves via a custom event on the window
+function listenForWallets() {
+  // Listen for wallet announcements (AIP-62 standard)
+  window.addEventListener('aptos:announceWallet', (event) => {
+    const wallet = event.detail;
+    if (!wallet) return;
+    // Prefer Petra but accept any AIP-62 wallet
+    if (!detectedWallet || wallet.info?.name === 'Petra') {
+      detectedWallet = wallet;
+    }
+    // Update UI if modal is open
+    const statusEl = document.getElementById('petraStatus');
+    if (statusEl) {
+      statusEl.textContent = 'Installed ✓';
+      statusEl.className   = 'wallet-option-status found';
+    }
+  });
+
+  // Dispatch the request event so wallets announce themselves
+  window.dispatchEvent(new Event('aptos:requestWallet'));
+}
+
 function openWalletModal() {
-  // If already connected show connected view, else show connect view
   if (authToken && userWallet) {
     showConnectedView(userWallet);
   } else {
     showConnectView();
   }
   document.getElementById('walletModal').classList.add('open');
-  checkPetraInstalled();
+  checkWalletStatus();
+  // Re-request wallet announcement in case it wasn't ready at boot
+  window.dispatchEvent(new Event('aptos:requestWallet'));
 }
 
 function closeWalletModal() {
@@ -826,71 +855,85 @@ function closeWalletModal() {
 }
 
 function showConnectView() {
-  document.getElementById('walletModalTitle').textContent = 'Connect Wallet';
+  document.getElementById('walletModalTitle').textContent      = 'Connect Wallet';
   document.getElementById('walletConnectView').style.display   = 'block';
   document.getElementById('walletConnectedView').style.display = 'none';
 }
 
 function showConnectedView(address) {
-  document.getElementById('walletModalTitle').textContent = 'Wallet';
+  document.getElementById('walletModalTitle').textContent      = 'Wallet';
   document.getElementById('walletConnectView').style.display   = 'none';
   document.getElementById('walletConnectedView').style.display = 'block';
-  document.getElementById('connectedAddress').textContent = address;
+  document.getElementById('connectedAddress').textContent      = address;
   fetchAptosBalance(address);
 }
 
-// Check if Petra is installed and update the button label
-function checkPetraInstalled() {
+function checkWalletStatus() {
   const statusEl = document.getElementById('petraStatus');
   if (!statusEl) return;
-  if (window.petra) {
+  if (detectedWallet) {
     statusEl.textContent = 'Installed ✓';
     statusEl.className   = 'wallet-option-status found';
   } else {
-    statusEl.textContent = 'Not installed';
+    statusEl.textContent = 'Not detected';
     statusEl.className   = 'wallet-option-status notfound';
   }
 }
 
-// Connect via Petra browser extension
+// Connect via AIP-62 wallet (Petra v2+)
 async function connectPetra() {
-  if (!window.petra) {
-    showToast('Petra not found — install it at petra.app', 'error');
+  if (!detectedWallet) {
+    showToast('Petra not detected — install it at petra.app then refresh', 'error');
     window.open('https://petra.app', '_blank');
     return;
   }
+
   try {
-    showToast('Connecting to Petra…');
-    const resp    = await window.petra.connect();
-    const address = resp.address;
-    await signInToAPI(address, resp.publicKey);
+    showToast('Opening Petra…');
+
+    // AIP-62 connect call
+    const response = await detectedWallet.connect();
+
+    // Extract address from AIP-62 response format
+    const address =
+      response?.address?.toString() ||
+      response?.account?.address?.toString() ||
+      null;
+
+    if (!address) throw new Error('No address returned from wallet');
+
+    const publicKey =
+      response?.publicKey?.toString() ||
+      response?.account?.publicKey?.toString() ||
+      '';
+
+    await signInToAPI(address, publicKey);
+
   } catch (err) {
-    if (err.message?.includes('User rejected')) {
-      showToast('Connection rejected in Petra', 'error');
+    if (err?.code === 4001 || err?.message?.toLowerCase().includes('reject') || err?.message?.toLowerCase().includes('cancel')) {
+      showToast('Cancelled — you rejected the connection in Petra', 'error');
     } else {
-      showToast(err.message, 'error');
+      console.error('Wallet connect error:', err);
+      showToast(err?.message || 'Connection failed', 'error');
     }
   }
 }
 
-// Connect with manually entered address (no extension needed)
+// Connect with manually entered address — no extension needed
 async function connectManual() {
   const input   = document.getElementById('manualWalletInput');
   const address = input.value.trim();
-  if (!address) { showToast('Please enter a wallet address', 'error'); return; }
-  if (!address.startsWith('0x') || address.length < 10) {
-    showToast('Invalid Aptos address — must start with 0x', 'error');
-    return;
-  }
+  if (!address)                                       { showToast('Please enter a wallet address', 'error'); return; }
+  if (!address.startsWith('0x') || address.length < 10) { showToast('Invalid address — must start with 0x', 'error'); return; }
   try {
     showToast('Connecting…');
-    await signInToAPI(address, null);
+    await signInToAPI(address, '');
   } catch (err) {
     showToast(err.message, 'error');
   }
 }
 
-// Call the backend auth endpoint and store JWT
+// POST to backend → get JWT
 async function signInToAPI(address, publicKey) {
   const data = await api('/api/auth/wallet', {
     method: 'POST',
@@ -906,52 +949,50 @@ async function signInToAPI(address, publicKey) {
   loadStats();
 }
 
-// Update the sidebar wallet card
+// Update sidebar card
 function showWalletConnected(address) {
-  document.getElementById('walletAddr').textContent        = address.slice(0,6) + '…' + address.slice(-4);
-  document.getElementById('connectHint').style.display     = 'none';
-  document.getElementById('liveIndicator').style.display   = 'flex';
+  document.getElementById('walletAddr').textContent       = address.slice(0,6) + '…' + address.slice(-4);
+  document.getElementById('connectHint').style.display    = 'none';
+  document.getElementById('liveIndicator').style.display  = 'flex';
 }
 
-// Fetch real APT balance from Aptos testnet
+// Fetch APT balance from Aptos testnet REST API
 async function fetchAptosBalance(address) {
   try {
-    const res  = await fetch(`https://api.testnet.aptoslabs.com/v1/accounts/${address}/resource/0x1::coin::CoinStore%3C0x1::aptos_coin::AptosCoin%3E`);
-    if (!res.ok) throw new Error('no balance');
+    const res = await fetch(
+      `https://api.testnet.aptoslabs.com/v1/accounts/${address}/resource/0x1::coin::CoinStore%3C0x1::aptos_coin::AptosCoin%3E`
+    );
+    if (!res.ok) throw new Error();
     const data = await res.json();
     const apt  = (Number(data.data.coin.value) / 1e8).toFixed(4);
     document.getElementById('connectedBalance').textContent = apt + ' APT';
     document.getElementById('walletBal').textContent        = apt + ' APT';
-    document.getElementById('walletUsd').textContent        = '≈ $' + (apt * 6.65).toFixed(2) + ' USD';
+    document.getElementById('walletUsd').textContent        = '≈ $' + (Number(apt) * 6.65).toFixed(2) + ' USD';
   } catch {
     document.getElementById('connectedBalance').textContent = '0.0000 APT';
     document.getElementById('walletBal').textContent        = '0.0000 APT';
   }
 }
 
-// Copy address to clipboard
 function copyAddress() {
-  navigator.clipboard.writeText(userWallet).then(() => {
-    showToast('Address copied!', 'success');
-  });
+  navigator.clipboard.writeText(userWallet).then(() => showToast('Address copied!', 'success'));
 }
 
-// Disconnect wallet — clear all state
 function disconnectWallet() {
+  try { if (detectedWallet?.disconnect) detectedWallet.disconnect(); } catch {}
   authToken  = '';
   userWallet = '';
   localStorage.removeItem('dp_token');
   localStorage.removeItem('dp_wallet');
-  document.getElementById('walletAddr').textContent      = 'Not connected';
-  document.getElementById('walletBal').textContent       = '—';
-  document.getElementById('walletUsd').textContent       = '';
-  document.getElementById('liveIndicator').style.display = 'none';
-  document.getElementById('connectHint').style.display   = 'block';
+  document.getElementById('walletAddr').textContent       = 'Not connected';
+  document.getElementById('walletBal').textContent        = '—';
+  document.getElementById('walletUsd').textContent        = '';
+  document.getElementById('liveIndicator').style.display  = 'none';
+  document.getElementById('connectHint').style.display    = 'block';
   closeWalletModal();
   showToast('Wallet disconnected');
 }
 
-// On load — restore session if token exists
 function restoreWalletSession() {
   if (authToken && userWallet) {
     showWalletConnected(userWallet);
